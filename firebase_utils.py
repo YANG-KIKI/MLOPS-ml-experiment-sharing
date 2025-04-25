@@ -1,1 +1,41 @@
-import firebase_adminfrom firebase_admin import credentials, dbimport streamlit as stimport jsonimport tempfile# Initialize Firebasedef init_firebase():    if not firebase_admin._apps:        firebase_config = dict(st.secrets["FIREBASE"])        if "\\n" in firebase_config["private_key"]:            firebase_config["private_key"] = firebase_config["private_key"].replace("\\n", "\n")        with tempfile.NamedTemporaryFile(mode="w", delete=False) as temp_file:            json.dump(firebase_config, temp_file)            temp_path = temp_file.name        cred = credentials.Certificate(temp_path)        firebase_admin.initialize_app(cred, {            "databaseURL": "https://mlops-database-default-rtdb.europe-west1.firebasedatabase.app/"        })         # Format the submission and add the submission under the userdef save_submission(email, data):    clean_email = email.replace(".", "_")    ref = db.reference("submissions")    user_ref = ref.child(clean_email)    user_ref.push(data) # Check to see if user has a submissiondef has_valid_submission(email):    ref = db.reference("submissions")    submissions = ref.child(email.replace(".", "_")).get()    return bool(submissions) # Get all submissions from all users and put them in a listdef get_all_submissions():    ref = db.reference("submissions")    data = ref.get()    results = []    if data:        for user_entries in data.values():            if isinstance(user_entries, dict):                for submission in user_entries.values():                    if isinstance(submission, dict):                        results.append(submission)    return results
+import firebase_admin
+from config import get_firestore_client 
+from datetime import datetime
+from google.cloud.firestore_v1 import SERVER_TIMESTAMP, Increment
+
+db = get_firestore_client()
+
+def save_submission(email, data):
+
+    clean_email = email.replace(".", "_").replace("@", "_at_")
+    user_doc_ref = db.collection("submissions").document(clean_email)
+    user_doc_data = {
+        'email': email, 
+        'last_submission_at': SERVER_TIMESTAMP, 
+    }
+    user_doc_ref.set(user_doc_data, merge=True)
+    user_doc_ref.collection("entries").add(data)
+
+
+def has_valid_submission(email):
+    clean_email = email.replace(".", "_").replace("@", "_at_")
+    user_doc_ref = db.collection("submissions").document(clean_email)
+    entries = user_doc_ref.collection("entries").limit(1).get()
+    return len(entries) > 0
+
+
+def get_all_submissions():
+    all_entries = []
+    users_stream = db.collection("submissions").stream()
+
+    for user in users_stream:
+        user_data = user.to_dict()
+        submitter_email = user_data.get('email', user.id.replace("_at_", "@").replace("_", "."))
+        entries_stream = db.collection("submissions").document(user.id).collection("entries").stream()
+        for entry in entries_stream:
+            entry_data = entry.to_dict()
+            entry_data["submitted_by"] = submitter_email
+            all_entries.append(entry_data)
+
+    return all_entries
+
